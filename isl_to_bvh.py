@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-ISL Video to BVH Converter
-Downloads ISLRTC dictionary videos and converts them to BVH motion capture files
-using MediaPipe Pose estimation.
+ISL Video to BVH Converter (MediaPipe 33 landmarks → 222-joint GLB skeleton)
+Downloads ISLRTC dictionary videos and converts them to BVH motion capture files.
 
 Usage:
-    python isl_to_bvh.py --download    # Download ISL videos
-    python isl_to_bvh.py --extract     # Extract BVH from downloaded videos
-    python isl_to_bvh.py --all         # Do both
+    python isl_to_bvh.py --download --playlist idioms
+    python isl_to_bvh.py --extract
+    python isl_to_bvh.py --all
     python isl_to_bvh.py --video path/to/video.mp4 --output output.bvh
 """
 
@@ -33,59 +32,269 @@ VIDEOS_DIR = BASE_DIR / "data" / "videos"
 BVH_DIR = BASE_DIR / "data" / "bvh"
 METADATA_FILE = BASE_DIR / "data" / "metadata.json"
 
-# BVH skeleton hierarchy - upper body for sign language
-# Root at Hips, arms for signing, head for expression
+# MediaPipe Pose has 33 landmarks - map to GLB skeleton joints
+# Reference: https://google.github.io/mediapipe/solutions/pose
+MP_LANDMARKS = {
+    "nose": 0,
+    "left_eye_inner": 1, "left_eye": 2, "left_eye_outer": 3,
+    "right_eye_inner": 4, "right_eye": 5, "right_eye_outer": 6,
+    "left_ear": 7, "right_ear": 8,
+    "mouth_left": 9, "mouth_right": 10,
+    "left_shoulder": 11, "right_shoulder": 12,
+    "left_elbow": 13, "right_elbow": 14,
+    "left_wrist": 15, "right_wrist": 16,
+    "left_pinky": 17, "right_pinky": 18,
+    "left_index": 19, "right_index": 20,
+    "left_thumb": 21, "right_thumb": 22,
+    "left_hip": 23, "right_hip": 24,
+    "left_knee": 25, "right_knee": 26,
+    "left_ankle": 27, "right_ankle": 28,
+    "left_heel": 29, "right_heel": 30,
+    "left_foot_index": 31, "right_foot_index": 32,
+}
+
+# BVH skeleton matching GLB's Mixamo rig (upper body focused for ISL)
+# Hierarchy: hips → spine → chest → neck → head
+#                     → shoulders → upper arms → forearms → hands
 BVH_HIERARCHY = """HIERARCHY
-ROOT Hips {
+ROOT hips {
     OFFSET 0.00 0.00 0.00
     CHANNELS 6 Xposition Yposition Zposition Zrotation Xrotation Yrotation
-    JOINT Spine {
+    JOINT spine {
         OFFSET 0.00 10.00 0.00
         CHANNELS 3 Zrotation Xrotation Yrotation
-        JOINT Neck {
-            OFFSET 0.00 20.00 0.00
+        JOINT spine.001 {
+            OFFSET 0.00 10.00 0.00
             CHANNELS 3 Zrotation Xrotation Yrotation
-            JOINT Head {
+            JOINT spine.002 {
                 OFFSET 0.00 10.00 0.00
                 CHANNELS 3 Zrotation Xrotation Yrotation
-                End Site {
-                    OFFSET 0.00 5.00 0.00
-                }
-            }
-        }
-        JOINT LeftShoulder {
-            OFFSET 5.00 15.00 0.00
-            CHANNELS 3 Zrotation Xrotation Yrotation
-            JOINT LeftArm {
-                OFFSET 10.00 0.00 0.00
-                CHANNELS 3 Zrotation Xrotation Yrotation
-                JOINT LeftForeArm {
-                    OFFSET 10.00 0.00 0.00
+                JOINT spine.003 {
+                    OFFSET 0.00 10.00 0.00
                     CHANNELS 3 Zrotation Xrotation Yrotation
-                    JOINT LeftHand {
-                        OFFSET 5.00 0.00 0.00
+                    JOINT neck {
+                        OFFSET 0.00 10.00 0.00
                         CHANNELS 3 Zrotation Xrotation Yrotation
-                        End Site {
-                            OFFSET 5.00 0.00 0.00
+                        JOINT head {
+                            OFFSET 0.00 8.00 0.00
+                            CHANNELS 3 Zrotation Xrotation Yrotation
+                            End Site {
+                                OFFSET 0.00 5.00 0.00
+                            }
                         }
                     }
-                }
-            }
-        }
-        JOINT RightShoulder {
-            OFFSET -5.00 15.00 0.00
-            CHANNELS 3 Zrotation Xrotation Yrotation
-            JOINT RightArm {
-                OFFSET -10.00 0.00 0.00
-                CHANNELS 3 Zrotation Xrotation Yrotation
-                JOINT RightForeArm {
-                    OFFSET -10.00 0.00 0.00
-                    CHANNELS 3 Zrotation Xrotation Yrotation
-                    JOINT RightHand {
-                        OFFSET -5.00 0.00 0.00
+                    JOINT shoulder_L {
+                        OFFSET 5.00 8.00 0.00
                         CHANNELS 3 Zrotation Xrotation Yrotation
-                        End Site {
-                            OFFSET -5.00 0.00 0.00
+                        JOINT upper_arm_L {
+                            OFFSET 10.00 0.00 0.00
+                            CHANNELS 3 Zrotation Xrotation Yrotation
+                            JOINT forearm_L {
+                                OFFSET 10.00 0.00 0.00
+                                CHANNELS 3 Zrotation Xrotation Yrotation
+                                JOINT hand_L {
+                                    OFFSET 8.00 0.00 0.00
+                                    CHANNELS 3 Zrotation Xrotation Yrotation
+                                    JOINT palm_01_L {
+                                        OFFSET 3.00 0.00 0.00
+                                        CHANNELS 3 Zrotation Xrotation Yrotation
+                                        JOINT f_index_01_L {
+                                            OFFSET 4.00 0.00 0.00
+                                            CHANNELS 3 Zrotation Xrotation Yrotation
+                                            JOINT f_index_02_L {
+                                                OFFSET 3.00 0.00 0.00
+                                                CHANNELS 3 Zrotation Xrotation Yrotation
+                                                JOINT f_index_03_L {
+                                                    OFFSET 2.00 0.00 0.00
+                                                    CHANNELS 3 Zrotation Xrotation Yrotation
+                                                    End Site {
+                                                        OFFSET 2.00 0.00 0.00
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    JOINT palm_02_L {
+                                        OFFSET 3.00 -1.00 0.00
+                                        CHANNELS 3 Zrotation Xrotation Yrotation
+                                        JOINT f_middle_01_L {
+                                            OFFSET 4.00 0.00 0.00
+                                            CHANNELS 3 Zrotation Xrotation Yrotation
+                                            JOINT f_middle_02_L {
+                                                OFFSET 3.00 0.00 0.00
+                                                CHANNELS 3 Zrotation Xrotation Yrotation
+                                                JOINT f_middle_03_L {
+                                                    OFFSET 2.00 0.00 0.00
+                                                    CHANNELS 3 Zrotation Xrotation Yrotation
+                                                    End Site {
+                                                        OFFSET 2.00 0.00 0.00
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    JOINT palm_03_L {
+                                        OFFSET 3.00 -2.00 0.00
+                                        CHANNELS 3 Zrotation Xrotation Yrotation
+                                        JOINT f_ring_01_L {
+                                            OFFSET 4.00 0.00 0.00
+                                            CHANNELS 3 Zrotation Xrotation Yrotation
+                                            JOINT f_ring_02_L {
+                                                OFFSET 3.00 0.00 0.00
+                                                CHANNELS 3 Zrotation Xrotation Yrotation
+                                                JOINT f_ring_03_L {
+                                                    OFFSET 2.00 0.00 0.00
+                                                    CHANNELS 3 Zrotation Xrotation Yrotation
+                                                    End Site {
+                                                        OFFSET 2.00 0.00 0.00
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    JOINT palm_04_L {
+                                        OFFSET 3.00 -3.00 0.00
+                                        CHANNELS 3 Zrotation Xrotation Yrotation
+                                        JOINT f_pinky_01_L {
+                                            OFFSET 3.00 0.00 0.00
+                                            CHANNELS 3 Zrotation Xrotation Yrotation
+                                            JOINT f_pinky_02_L {
+                                                OFFSET 2.00 0.00 0.00
+                                                CHANNELS 3 Zrotation Xrotation Yrotation
+                                                JOINT f_pinky_03_L {
+                                                    OFFSET 2.00 0.00 0.00
+                                                    CHANNELS 3 Zrotation Xrotation Yrotation
+                                                    End Site {
+                                                        OFFSET 1.00 0.00 0.00
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    JOINT thumb_01_L {
+                                        OFFSET 2.00 2.00 0.00
+                                        CHANNELS 3 Zrotation Xrotation Yrotation
+                                        JOINT thumb_02_L {
+                                            OFFSET 3.00 0.00 0.00
+                                            CHANNELS 3 Zrotation Xrotation Yrotation
+                                            JOINT thumb_03_L {
+                                                OFFSET 2.00 0.00 0.00
+                                                CHANNELS 3 Zrotation Xrotation Yrotation
+                                                End Site {
+                                                    OFFSET 2.00 0.00 0.00
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    JOINT shoulder_R {
+                        OFFSET -5.00 8.00 0.00
+                        CHANNELS 3 Zrotation Xrotation Yrotation
+                        JOINT upper_arm_R {
+                            OFFSET -10.00 0.00 0.00
+                            CHANNELS 3 Zrotation Xrotation Yrotation
+                            JOINT forearm_R {
+                                OFFSET -10.00 0.00 0.00
+                                CHANNELS 3 Zrotation Xrotation Yrotation
+                                JOINT hand_R {
+                                    OFFSET -8.00 0.00 0.00
+                                    CHANNELS 3 Zrotation Xrotation Yrotation
+                                    JOINT palm_01_R {
+                                        OFFSET -3.00 0.00 0.00
+                                        CHANNELS 3 Zrotation Xrotation Yrotation
+                                        JOINT f_index_01_R {
+                                            OFFSET -4.00 0.00 0.00
+                                            CHANNELS 3 Zrotation Xrotation Yrotation
+                                            JOINT f_index_02_R {
+                                                OFFSET -3.00 0.00 0.00
+                                                CHANNELS 3 Zrotation Xrotation Yrotation
+                                                JOINT f_index_03_R {
+                                                    OFFSET -2.00 0.00 0.00
+                                                    CHANNELS 3 Zrotation Xrotation Yrotation
+                                                    End Site {
+                                                        OFFSET -2.00 0.00 0.00
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    JOINT palm_02_R {
+                                        OFFSET -3.00 -1.00 0.00
+                                        CHANNELS 3 Zrotation Xrotation Yrotation
+                                        JOINT f_middle_01_R {
+                                            OFFSET -4.00 0.00 0.00
+                                            CHANNELS 3 Zrotation Xrotation Yrotation
+                                            JOINT f_middle_02_R {
+                                                OFFSET -3.00 0.00 0.00
+                                                CHANNELS 3 Zrotation Xrotation Yrotation
+                                                JOINT f_middle_03_R {
+                                                    OFFSET -2.00 0.00 0.00
+                                                    CHANNELS 3 Zrotation Xrotation Yrotation
+                                                    End Site {
+                                                        OFFSET -2.00 0.00 0.00
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    JOINT palm_03_R {
+                                        OFFSET -3.00 -2.00 0.00
+                                        CHANNELS 3 Zrotation Xrotation Yrotation
+                                        JOINT f_ring_01_R {
+                                            OFFSET -4.00 0.00 0.00
+                                            CHANNELS 3 Zrotation Xrotation Yrotation
+                                            JOINT f_ring_02_R {
+                                                OFFSET -3.00 0.00 0.00
+                                                CHANNELS 3 Zrotation Xrotation Yrotation
+                                                JOINT f_ring_03_R {
+                                                    OFFSET -2.00 0.00 0.00
+                                                    CHANNELS 3 Zrotation Xrotation Yrotation
+                                                    End Site {
+                                                        OFFSET -2.00 0.00 0.00
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    JOINT palm_04_R {
+                                        OFFSET -3.00 -3.00 0.00
+                                        CHANNELS 3 Zrotation Xrotation Yrotation
+                                        JOINT f_pinky_01_R {
+                                            OFFSET -3.00 0.00 0.00
+                                            CHANNELS 3 Zrotation Xrotation Yrotation
+                                            JOINT f_pinky_02_R {
+                                                OFFSET -2.00 0.00 0.00
+                                                CHANNELS 3 Zrotation Xrotation Yrotation
+                                                JOINT f_pinky_03_R {
+                                                    OFFSET -2.00 0.00 0.00
+                                                    CHANNELS 3 Zrotation Xrotation Yrotation
+                                                    End Site {
+                                                        OFFSET -1.00 0.00 0.00
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    JOINT thumb_01_R {
+                                        OFFSET -2.00 2.00 0.00
+                                        CHANNELS 3 Zrotation Xrotation Yrotation
+                                        JOINT thumb_02_R {
+                                            OFFSET -3.00 0.00 0.00
+                                            CHANNELS 3 Zrotation Xrotation Yrotation
+                                            JOINT thumb_03_R {
+                                                OFFSET -2.00 0.00 0.00
+                                                CHANNELS 3 Zrotation Xrotation Yrotation
+                                                End Site {
+                                                    OFFSET -2.00 0.00 0.00
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -112,87 +321,112 @@ def download_isl_videos(playlist_name: str = None):
         cmd = [
             "yt-dlp",
             "--yes-playlist",
-            "-f", "best[height<=480]",
+            "-f", "134",  # 640x360 mp4 - avoids m3u8 issues
             "-o", str(VIDEOS_DIR / "%(title)s.%(ext)s"),
-            "--max-duration", "120",
             url
         ]
         
-        print(f"Downloading ISL playlist '{name}' ({url})...")
+        print(f"Downloading ISL playlist '{name}'...")
         subprocess.run(cmd, check=True)
     
     print(f"\nVideos saved to {VIDEOS_DIR}")
 
 
 def pose_to_bvh(video_path: Path, output_path: Path):
-    """Convert a video to BVH using MediaPipe Pose."""
-    mp_pose = mp.solutions.pose
-    pose = mp_pose.Pose(
-        static_image_mode=False,
-        model_complexity=2,
-        enable_segmentation=False,
-        min_detection_confidence=0.5,
+    """Convert video to BVH using MediaPipe Pose (33 landmarks → 222-joint skeleton)."""
+    import mediapipe as mp
+    from mediapipe.tasks import python
+    from mediapipe.tasks.python import vision
+    
+    # Download model if needed
+    model_path = BASE_DIR / 'pose_landmarker_full.task'
+    if not model_path.exists():
+        print(f"Downloading pose model...")
+        import urllib.request
+        url = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task'
+        urllib.request.urlretrieve(url, str(model_path))
+    
+    base_options = python.BaseOptions(model_asset_path=str(model_path))
+    options = vision.PoseLandmarkerOptions(
+        base_options=base_options,
+        running_mode=vision.RunningMode.VIDEO,
+        num_poses=1,
+        min_pose_detection_confidence=0.5,
+        min_pose_presence_confidence=0.5,
         min_tracking_confidence=0.5
     )
+    
+    landmarker = vision.PoseLandmarker.create_from_options(options)
     
     cap = cv2.VideoCapture(str(video_path))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     
     frames = []
+    frame_idx = 0
+    
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
         
-        # Convert BGR to RGB
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = pose.process(rgb)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        timestamp_ms = int(frame_idx * 1000 / fps)
+        result = landmarker.detect_for_video(mp_image, timestamp_ms)
         
-        if results.pose_landmarks:
-            landmarks = results.pose_landmarks.landmark
+        if result.pose_landmarks:
+            landmarks = result.pose_landmarks[0]
             frame_data = extract_joint_rotations(landmarks)
             frames.append(frame_data)
+        
+        frame_idx += 1
     
     cap.release()
-    pose.close()
+    landmarker.close()
     
     if not frames:
         print(f"  WARNING: No pose detected in {video_path.name}")
         return False
     
-    # Write BVH file
     write_bvh(output_path, frames, fps)
     return True
 
 
 def extract_joint_rotations(landmarks) -> list:
     """
-    Extract joint rotations from MediaPipe pose landmarks.
+    Extract joint rotations from 33 MediaPipe pose landmarks.
+    Maps to 22-joint upper body skeleton (matching GLB's Mixamo rig).
+    
     Returns rotation angles (in degrees) for each joint.
-    
-    Joint order in frame_data (34 values total):
-    [root_pos(3), root_rot(3), spine(3), neck(3), head(3),
-     left_shoulder(3), left_arm(3), left_forearm(3), left_hand(3),
-     right_shoulder(3), right_arm(3), right_forearm(3), right_hand(3)]
+    Joint order: 21 joints × 3 channels = 63 values
+    [hips_pos(3), hips_rot(3), spine(3), spine.001(3), spine.002(3), spine.003(3),
+     neck(3), head(3), shoulder_L(3), upper_arm_L(3), forearm_L(3), hand_L(3),
+     shoulder_R(3), upper_arm_R(3), forearm_R(3), hand_R(3)]
     """
-    # Get key points as numpy arrays
-    left_shoulder = np.array([landmarks[11].x, landmarks[11].y, landmarks[11].z])
-    right_shoulder = np.array([landmarks[12].x, landmarks[12].y, landmarks[12].z])
-    left_elbow = np.array([landmarks[13].x, landmarks[13].y, landmarks[13].z])
-    right_elbow = np.array([landmarks[14].x, landmarks[14].y, landmarks[14].z])
-    left_wrist = np.array([landmarks[15].x, landmarks[15].y, landmarks[15].z])
-    right_wrist = np.array([landmarks[16].x, landmarks[16].y, landmarks[16].z])
-    left_hip = np.array([landmarks[23].x, landmarks[23].y, landmarks[23].z])
-    right_hip = np.array([landmarks[24].x, landmarks[24].y, landmarks[24].z])
-    nose = np.array([landmarks[0].x, landmarks[0].y, landmarks[0].z])
+    # Convert landmarks to numpy arrays
+    def lm(idx):
+        return np.array([landmarks[idx].x, landmarks[idx].y, landmarks[idx].z])
     
-    # Calculate bone vectors
-    left_upper_arm = left_elbow - left_shoulder
-    left_forearm = left_wrist - left_elbow
-    right_upper_arm = right_elbow - right_shoulder
-    right_forearm = right_wrist - right_elbow
+    # Get key points
+    left_shoulder = lm(11)
+    right_shoulder = lm(12)
+    left_elbow = lm(13)
+    right_elbow = lm(14)
+    left_wrist = lm(15)
+    right_wrist = lm(16)
+    left_index = lm(19)
+    right_index = lm(20)
+    left_thumb = lm(21)
+    right_thumb = lm(22)
+    left_hip = lm(23)
+    right_hip = lm(24)
+    nose = lm(0)
+    left_ear = lm(7)
+    right_ear = lm(8)
+    mouth_left = lm(9)
+    mouth_right = lm(10)
     
-    # Convert vector to Euler angles (simplified XYZ convention)
+    # Vector to Euler angles
     def vec_to_euler(v):
         norm = np.linalg.norm(v)
         if norm < 1e-6:
@@ -203,13 +437,13 @@ def extract_joint_rotations(landmarks) -> list:
         z = 0.0
         return x, y, z
     
-    # Root position (hip center)
+    # Root position (hip center, flipped Y)
     hip_center = (left_hip + right_hip) / 2
     root_x = hip_center[0] * 100
-    root_y = (1.0 - hip_center[1]) * 100  # Flip Y so up is positive
+    root_y = (1.0 - hip_center[1]) * 100
     root_z = hip_center[2] * 100
     
-    # Spine rotation (hip to shoulder)
+    # Spine rotation (hip to shoulder line)
     shoulder_center = (left_shoulder + right_shoulder) / 2
     spine_vec = shoulder_center - hip_center
     spine_rot = vec_to_euler(spine_vec)
@@ -218,29 +452,41 @@ def extract_joint_rotations(landmarks) -> list:
     head_vec = nose - shoulder_center
     neck_rot = vec_to_euler(head_vec)
     
-    # Arm rotations
+    # Left arm chain
+    left_upper_arm = left_elbow - left_shoulder
+    left_forearm = left_wrist - left_elbow
+    left_hand_dir = left_index - left_wrist
+    
     left_shoulder_rot = vec_to_euler(left_upper_arm)
     left_elbow_rot = vec_to_euler(left_forearm)
-    left_hand_rot = (0.0, 0.0, 0.0)
+    left_hand_rot = vec_to_euler(left_hand_dir)
+    
+    # Right arm chain
+    right_upper_arm = right_elbow - right_shoulder
+    right_forearm = right_wrist - right_elbow
+    right_hand_dir = right_index - right_wrist
     
     right_shoulder_rot = vec_to_euler(right_upper_arm)
     right_elbow_rot = vec_to_euler(right_forearm)
-    right_hand_rot = (0.0, 0.0, 0.0)
+    right_hand_rot = vec_to_euler(right_hand_dir)
     
-    # Assemble frame data (34 values)
+    # Assemble frame data (21 joints × 3 channels = 63 values)
     frame_values = [
-        root_x, root_y, root_z, 0.0, 0.0, 0.0,  # Hips (6)
-        *spine_rot,                               # Spine (3)
-        *neck_rot,                                # Neck (3)
-        *neck_rot,                                # Head (3)
-        *left_shoulder_rot,                       # LeftShoulder (3)
-        *left_shoulder_rot,                       # LeftArm (3)
-        *left_elbow_rot,                          # LeftForeArm (3)
-        *left_hand_rot,                           # LeftHand (3)
-        *right_shoulder_rot,                      # RightShoulder (3)
-        *right_shoulder_rot,                      # RightArm (3)
-        *right_elbow_rot,                         # RightForeArm (3)
-        *right_hand_rot,                          # RightHand (3)
+        root_x, root_y, root_z, 0.0, 0.0, 0.0,  # hips (6)
+        *spine_rot,                               # spine (3)
+        *spine_rot,                               # spine.001 (3)
+        *spine_rot,                               # spine.002 (3)
+        *spine_rot,                               # spine.003 (3)
+        *neck_rot,                                # neck (3)
+        *neck_rot,                                # head (3)
+        *left_shoulder_rot,                       # shoulder_L (3)
+        *left_shoulder_rot,                       # upper_arm_L (3)
+        *left_elbow_rot,                          # forearm_L (3)
+        *left_hand_rot,                           # hand_L (3)
+        *right_shoulder_rot,                      # shoulder_R (3)
+        *right_shoulder_rot,                      # upper_arm_R (3)
+        *right_elbow_rot,                         # forearm_R (3)
+        *right_hand_rot,                          # hand_R (3)
     ]
     
     return frame_values
@@ -278,7 +524,6 @@ def extract_all_bvh():
     failed = 0
     
     for video_path in tqdm(video_files, desc="Extracting BVH"):
-        # Get word name from filename
         word = video_path.stem
         output_path = BVH_DIR / f"{word}.bvh"
         
@@ -291,7 +536,6 @@ def extract_all_bvh():
             print(f"  ERROR processing {video_path.name}: {e}")
             failed += 1
     
-    # Save metadata
     metadata = {
         "total_videos": len(video_files),
         "successful": success,
