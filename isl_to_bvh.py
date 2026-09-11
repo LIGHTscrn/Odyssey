@@ -21,8 +21,11 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-# ISLRTC ISL Dictionary playlist
-ISL_PLAYLIST_URL = "https://youtube.com/playlist?list=PLFjydPMg4Dapq9vcdmGyHs8uJhiqMgUrX"
+# ISLRTC ISL playlists
+ISL_PLAYLISTS = {
+    "everyday_terms": "https://youtube.com/playlist?list=PLFjydPMg4Dapq9vcdmGyHs8uJhiqMgUrX",
+    "idioms": "https://youtube.com/playlist?list=PLFjydPMg4DarxA0Pe3EbAlKP2uknntTRe",
+}
 
 # Paths
 BASE_DIR = Path(__file__).parent
@@ -93,23 +96,32 @@ ROOT Hips {
 """
 
 
-def download_isl_videos():
-    """Download all ISL dictionary videos from the playlist."""
+def download_isl_videos(playlist_name: str = None):
+    """Download ISL dictionary videos. If playlist_name given, download that one; otherwise download all."""
     VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
     
-    # Download videos (short ones only, <30s, low res for speed)
-    cmd = [
-        "yt-dlp",
-        "--yes-playlist",
-        "-f", "best[height<=480]",
-        "-o", str(VIDEOS_DIR / "%(title)s.%(ext)s"),
-        "--max-duration", "30",
-        ISL_PLAYLIST_URL
-    ]
+    if playlist_name:
+        if playlist_name not in ISL_PLAYLISTS:
+            print(f"Unknown playlist: {playlist_name}. Available: {list(ISL_PLAYLISTS.keys())}")
+            return
+        urls = [(playlist_name, ISL_PLAYLISTS[playlist_name])]
+    else:
+        urls = list(ISL_PLAYLISTS.items())
     
-    print("Downloading ISL videos from playlist...")
-    subprocess.run(cmd, check=True)
-    print(f"Videos saved to {VIDEOS_DIR}")
+    for name, url in urls:
+        cmd = [
+            "yt-dlp",
+            "--yes-playlist",
+            "-f", "best[height<=480]",
+            "-o", str(VIDEOS_DIR / "%(title)s.%(ext)s"),
+            "--max-duration", "120",
+            url
+        ]
+        
+        print(f"Downloading ISL playlist '{name}' ({url})...")
+        subprocess.run(cmd, check=True)
+    
+    print(f"\nVideos saved to {VIDEOS_DIR}")
 
 
 def pose_to_bvh(video_path: Path, output_path: Path):
@@ -301,6 +313,7 @@ def main():
     parser.add_argument("--download", action="store_true", help="Download ISL videos")
     parser.add_argument("--extract", action="store_true", help="Extract BVH from videos")
     parser.add_argument("--all", action="store_true", help="Download and extract")
+    parser.add_argument("--playlist", type=str, help=f"Playlist to download: {list(ISL_PLAYLISTS.keys())}")
     parser.add_argument("--video", type=str, help="Process a single video file")
     parser.add_argument("--output", type=str, help="Output BVH path (for single video)")
     
@@ -313,7 +326,7 @@ def main():
         pose_to_bvh(video_path, output_path)
         print(f"Saved to {output_path}")
     elif args.download or args.all:
-        download_isl_videos()
+        download_isl_videos(args.playlist)
     
     if args.extract or args.all:
         extract_all_bvh()

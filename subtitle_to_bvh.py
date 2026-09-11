@@ -124,39 +124,89 @@ def tokenize(text: str) -> list:
     return [w for w in words if w]
 
 
+def find_phrase_match(text: str, bvh_words: set, max_phrase_len: int = 5) -> tuple:
+    """
+    Find the longest matching phrase in text that has a BVH file.
+    Returns (phrase, remaining_text) or (None, text) if no match.
+    """
+    words = tokenize(text)
+    
+    # Try longest phrases first
+    for length in range(min(len(words), max_phrase_len), 1, -1):
+        for i in range(len(words) - length + 1):
+            phrase = ' '.join(words[i:i+length])
+            if phrase in bvh_words:
+                # Return the phrase and remaining text
+                before = ' '.join(words[:i])
+                after = ' '.join(words[i+length:])
+                return phrase, before + ' ' + after
+    
+    # No phrase match found
+    return None, text
+
+
 def match_words_to_bvh(subtitles: list, bvh_dir: Path) -> dict:
     """
-    Map each subtitle's words to available BVH clips.
+    Map each subtitle's words/phrases to available BVH clips.
     Returns a timeline of {word, start, end, bvh_file}.
     """
-    # Get available BVH words
+    # Get available BVH words/phrases
     bvh_files = list(bvh_dir.glob("*.bvh"))
     bvh_words = {f.stem.lower(): f for f in bvh_files}
     
     timeline = []
-    oov_words = set()  # Out-of-vocabulary words
+    oov_words = set()
     
     for sub in subtitles:
-        words = tokenize(sub['text'])
-        # Distribute time evenly across words
-        word_duration = sub['duration'] / max(len(words), 1)
+        text = sub['text']
+        duration = sub['duration']
+        start_time = sub['start']
         
-        for i, word in enumerate(words):
-            start = sub['start'] + i * word_duration
-            end = start + word_duration
+        # Try phrase matching first, then fall back to word-by-word
+        tokens = tokenize(text)
+        i = 0
+        
+        while i < len(tokens):
+            # Try longest phrase match at position i
+            matched = False
+            for length in range(min(len(tokens) - i, 5), 0, -1):
+                phrase = ' '.join(tokens[i:i+length])
+                
+                if phrase in bvh_words:
+                    # Found a phrase match
+                    phrase_duration = duration * length / len(tokens)
+                    
+                    timeline.append({
+                        'word': phrase,
+                        'start': round(start_time, 3),
+                        'end': round(start_time + phrase_duration, 3),
+                        'bvh_file': str(bvh_words[phrase]),
+                        'fingerspell': False,
+                        'is_phrase': length > 1
+                    })
+                    
+                    start_time += phrase_duration
+                    i += length
+                    matched = True
+                    break
             
-            bvh_file = bvh_words.get(word)
-            
-            timeline.append({
-                'word': word,
-                'start': round(start, 3),
-                'end': round(end, 3),
-                'bvh_file': str(bvh_file) if bvh_file else None,
-                'fingerspell': bvh_file is None
-            })
-            
-            if not bvh_file:
+            if not matched:
+                # Single word not found in BVH - fingerspell
+                word = tokens[i]
+                word_duration = duration / len(tokens)
+                
+                timeline.append({
+                    'word': word,
+                    'start': round(start_time, 3),
+                    'end': round(start_time + word_duration, 3),
+                    'bvh_file': None,
+                    'fingerspell': True,
+                    'is_phrase': False
+                })
+                
                 oov_words.add(word)
+                start_time += word_duration
+                i += 1
     
     return {
         'timeline': timeline,

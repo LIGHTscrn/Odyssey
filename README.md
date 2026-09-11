@@ -5,13 +5,20 @@ Converts YouTube video subtitles to Indian Sign Language (ISL) signing avatar.
 ## Pipeline
 
 ```
-YouTube URL → yt-dlp (subtitles) → NLP Glosser → BVH clip selector → Three.js Avatar
-                     ↑                                        ↓
-                  ISL Dictionary                          Avatar Renderer
-                  (4000+ signs)                         (BVH-driven 3D)
+YouTube URL → yt-dlp (subtitles) → Phrase-aware matcher → BVH clip selector → Three.js Avatar
+                     ↑                                              ↓
+                  ISL Dictionary                                Avatar Renderer
+                  (4000+ signs + idioms)                      (BVH-driven 3D)
 ```
 
-## Components
+## Playlists
+
+- **Everyday Terms** (4,087 signs): `PLFjydPMg4Dapq9vcdmGyHs8uJhiqMgUrX`
+- **English Idioms in ISL** (10 phrases): `PLFjydPMg4DarxA0Pe3EbAlKP2uknntTRe`
+
+## Phrase matching
+
+The subtitle matcher tries longest-phrase-first (e.g. "make a long story short" → single BVH clip) before falling back to word-by-word fingerspelling.
 
 ### `isl_to_bvh.py` - BVH Extraction
 Converts ISLRTC ISL dictionary videos → BVH motion files via MediaPipe Pose.
