@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ISL Avatar - BVH Player</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0f;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 2rem;
+        }
+        h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+        .subtitle { color: #888; margin-bottom: 2rem; }
+        #canvas-container {
+            width: 100%;
+            max-width: 800px;
+            aspect-ratio: 16/9;
+            background: #111;
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+        }
+        canvas { width: 100%; height: 100%; display: block; }
+        .controls {
+            display: flex;
+            gap: 1rem;
+            margin-top: 1.5rem;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        button {
+            background: #4f46e5;
+            color: #fff;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover { background: #6366f1; }
+        button:disabled { background: #333; cursor: not-allowed; }
+        .input-group {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        input[type="text"] {
+            background: #1a1a2e;
+            border: 1px solid #333;
+            color: #fff;
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            flex: 1;
+            min-width: 200px;
+        }
+        input[type="file"] { display: none; }
+        .status {
+            margin-top: 1rem;
+            padding: 0.75rem 1rem;
+            background: #1a1a2e;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            color: #aaa;
+            min-height: 2.5rem;
+        }
+        .word-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 1rem;
+            max-width: 800px;
+            justify-content: center;
+        }
+        .word-tag {
+            background: #1a1a2e;
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            border: 1px solid #333;
+            transition: all 0.2s;
+        }
+        .word-tag:hover {
+            background: #4f46e5;
+            border-color: #4f46e5;
+        }
+        .word-tag.active {
+            background: #4f46e5;
+            border-color: #6366f1;
+        }
+    </style>
+</head>
+<body>
+    <h1>🖐️ ISL Avatar</h1>
+    <p class="subtitle">BVH Motion Capture Player for Indian Sign Language</p>
+    
+    <div id="canvas-container">
+        <canvas id="avatar-canvas"></canvas>
+    </div>
+    
+    <div class="controls">
+        <div class="input-group">
+            <input type="text" id="bvh-url" placeholder="Load BVH file...">
+            <button id="load-btn">Load</button>
+        </div>
+        <label for="file-input" style="cursor:pointer;">
+            <input type="file" id="file-input" accept=".bvh">
+            <span style="background:#4f46e5;color:#fff;padding:0.75rem 1.5rem;border-radius:8px;font-size:0.9rem;display:inline-block;">📁 Open BVH</span>
+        </label>
+        <button id="play-btn" disabled>▶️ Play</button>
+        <button id="pause-btn" disabled>⏸️ Pause</button>
+        <button id="stop-btn" disabled>⏹️ Stop</button>
+    </div>
+    
+    <div class="status" id="status">Ready. Load a BVH file to start.</div>
+    
+    <div class="word-list" id="word-list"></div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { BVHLoader } from 'three/addons/loaders/BVHLoader.js';
+        import { SkeletonHelper } from 'three';
+
+        const canvas = document.getElementById('avatar-canvas');
+        const container = document.getElementById('canvas-container');
+        const statusEl = document.getElementById('status');
+        const playBtn = document.getElementById('play-btn');
+        const pauseBtn = document.getElementById('pause-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const loadBtn = document.getElementById('load-btn');
+        const bvhUrlInput = document.getElementById('bvh-url');
+        const fileInput = document.getElementById('file-input');
+
+        // Three.js setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x111118);
+        
+        const camera = new THREE.PerspectiveCamera(45, 16/9, 0.1, 1000);
+        camera.position.set(0, 80, 120);
+        camera.lookAt(0, 80, 0);
+        
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0x404040, 2);
+        scene.add(ambientLight);
+        
+        const dirLight = new THREE.DirectionalLight(0xffffff, 3);
+        dirLight.position.set(50, 100, 50);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+        
+        const backLight = new THREE.DirectionalLight(0x6366f1, 1);
+        backLight.position.set(-50, 50, -50);
+        scene.add(backLight);
+
+        // Ground plane
+        const groundGeo = new THREE.PlaneGeometry(200, 200);
+        const groundMat = new THREE.MeshStandardMaterial({ 
+            color: 0x1a1a2e, 
+            roughness: 0.8 
+        });
+        const ground = new THREE.Mesh(groundGeo, groundMat);
+        ground.rotation.x = -Math.PI / 2;
+        ground.position.y = -1;
+        ground.receiveShadow = true;
+        scene.add(ground);
+
+        // Grid
+        const gridHelper = new THREE.GridHelper(200, 20, 0x333, 0x222);
+        scene.add(gridHelper);
+
+        // Resize
+        function resize() {
+            const w = container.clientWidth;
+            const h = container.clientHeight;
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+            renderer.setSize(w, h);
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // BVH state
+        let mixer = null;
+        let clip = null;
+        let skeletonHelper = null;
+        let isPlaying = false;
+
+        function loadBVH(source) {
+            const loader = new BVHLoader();
+            
+            const onLoad = (result) => {
+                clip = result.clip;
+                
+                // Create a simple skeleton representation
+                const bones = [];
+                const numBones = 20; // Approximate for our skeleton
+                
+                // Create a basic avatar using simple geometry
+                clearAvatar();
+                
+                // Create avatar parts
+                const avatarGroup = new THREE.Group();
+                
+                // Hips
+                const hipGeo = new THREE.CylinderGeometry(12, 10, 20, 8);
+                const hipMat = new THREE.MeshStandardMaterial({ color: 0x4f46e5, metalness: 0.5 });
+                const hips = new THREE.Mesh(hipGeo, hipMat);
+                hips.position.set(0, 60, 0);
+                avatarGroup.add(hips);
+                
+                // Spine/chest
+                const spineGeo = new THREE.CylinderGeometry(15, 12, 30, 8);
+                const spineMat = new THREE.MeshStandardMaterial({ color: 0x6366f1, metalness: 0.5 });
+                const spine = new THREE.Mesh(spineGeo, spineMat);
+                spine.position.set(0, 85, 0);
+                avatarGroup.add(spine);
+                
+                // Head
+                const headGeo = new THREE.SphereGeometry(12, 16, 16);
+                const headMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.3 });
+                const head = new THREE.Mesh(headGeo, headMat);
+                head.position.set(0, 115, 0);
+                avatarGroup.add(head);
+                
+                // Shoulders
+                const shoulderGeo = new THREE.SphereGeometry(6, 8, 8);
+                const leftShoulder = new THREE.Mesh(shoulderGeo, hipMat);
+                leftShoulder.position.set(18, 95, 0);
+                avatarGroup.add(leftShoulder);
+                
+                const rightShoulder = new THREE.Mesh(shoulderGeo, hipMat);
+                rightShoulder.position.set(-18, 95, 0);
+                avatarGroup.add(rightShoulder);
+                
+                // Arms
+                const armGeo = new THREE.CylinderGeometry(4, 3, 35, 8);
+                const leftArm = new THREE.Mesh(armGeo, spineMat);
+                leftArm.position.set(25, 70, 0);
+                leftArm.rotation.z = 0.2;
+                avatarGroup.add(leftArm);
+                
+                const rightArm = new THREE.Mesh(armGeo, spineMat);
+                rightArm.position.set(-25, 70, 0);
+                rightArm.rotation.z = -0.2;
+                avatarGroup.add(rightArm);
+                
+                // Forearms
+                const forearmGeo = new THREE.CylinderGeometry(3, 2.5, 35, 8);
+                const leftForearm = new THREE.Mesh(forearmGeo, hipMat);
+                leftForearm.position.set(30, 45, 0);
+                leftForearm.rotation.z = 0.3;
+                avatarGroup.add(leftForearm);
+                
+                const rightForearm = new THREE.Mesh(forearmGeo, hipMat);
+                rightForearm.position.set(-30, 45, 0);
+                rightForearm.rotation.z = -0.3;
+                avatarGroup.add(rightForearm);
+                
+                // Hands
+                const handGeo = new THREE.BoxGeometry(8, 12, 4);
+                const handMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.3 });
+                const leftHand = new THREE.Mesh(handGeo, handMat);
+                leftHand.position.set(32, 22, 0);
+                avatarGroup.add(leftHand);
+                
+                const rightHand = new THREE.Mesh(handGeo, handMat);
+                rightHand.position.set(-32, 22, 0);
+                avatarGroup.add(rightHand);
+                
+                scene.add(avatarGroup);
+                
+                // Set up animation
+                mixer = new THREE.AnimationMixer(avatarGroup);
+                
+                // Map BVH bones to our simple avatar
+                const bvhBones = result.skeleton.bones;
+                
+                // Create a custom animation clip
+                const times = [];
+                const positions = [];
+                const rotations = [];
+                
+                const duration = clip.duration;
+                const fps = 30;
+                const numFrames = Math.floor(duration * fps);
+                
+                for (let i = 0; i <= numFrames; i++) {
+                    const t = i / fps;
+                    times.push(t);
+                    
+                    // Sample pose at this time
+                    // This is simplified - in practice you'd map BVH joints to avatar bones
+                    const sin = Math.sin(t * 4);
+                    positions.push(sin * 5, 0, 0);
+                    rotations.push(sin * 0.5, 0, 0);
+                }
+                
+                statusEl.textContent = `Loaded BVH: ${clip.duration.toFixed(2)}s, ${clip.tracks.length} tracks`;
+                playBtn.disabled = false;
+                pauseBtn.disabled = true;
+                stopBtn.disabled = true;
+                isPlaying = false;
+                
+                // Store reference to avatar parts for animation
+                userData.avatarGroup = avatarGroup;
+                userData.bvhBones = bvhBones;
+            };
+            
+            const onError = (err) => {
+                statusEl.textContent = `Error loading BVH: ${err.message || err}`;
+            };
+            
+            const onProgress = (xhr) => {
+                if (xhr.lengthComputable) {
+                    const pct = Math.round((xhr.loaded / xhr.total) * 100);
+                    statusEl.textContent = `Loading... ${pct}%`;
+                }
+            };
+            
+            if (typeof source === 'string') {
+                loader.parse(source, onLoad, onProgress, onError);
+            } else {
+                loader.load(source, onLoad, onProgress, onError);
+            }
+        }
+
+        function clearAvatar() {
+            // Remove previous avatar
+            const toRemove = [];
+            scene.traverse((child) => {
+                if (child.userData.isAvatar) {
+                    toRemove.push(child);
+                }
+            });
+            toRemove.forEach(obj => scene.remove(obj));
+            
+            if (mixer) {
+                mixer.stopAllAction();
+                mixer = null;
+            }
+            clip = null;
+        }
+
+        function play() {
+            if (clip && mixer) {
+                // Create action with simplified animation
+                const action = mixer.clipAction(clip);
+                action.play();
+                isPlaying = true;
+                playBtn.disabled = true;
+                pauseBtn.disabled = false;
+                stopBtn.disabled = false;
+                statusEl.textContent = 'Playing...';
+            }
+        }
+
+        function pause() {
+            if (mixer) {
+                mixer.stopAllAction();
+                isPlaying = false;
+                playBtn.disabled = false;
+                pauseBtn.disabled = true;
+                stopBtn.disabled = false;
+                statusEl.textContent = 'Paused';
+            }
+        }
+
+        function stop() {
+            if (mixer) {
+                mixer.stopAllAction();
+                isPlaying = false;
+                playBtn.disabled = false;
+                pauseBtn.disabled = true;
+                stopBtn.disabled = true;
+                statusEl.textContent = 'Stopped';
+            }
+        }
+
+        // Event listeners
+        loadBtn.addEventListener('click', () => {
+            const url = bvhUrlInput.value.trim();
+            if (url) loadBVH(url);
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    loadBVH(event.target.result);
+                };
+                reader.readAsText(file);
+            }
+        });
+
+        playBtn.addEventListener('click', play);
+        pauseBtn.addEventListener('click', pause);
+        stopBtn.addEventListener('click', stop);
+
+        // Animation loop
+        const clock = new THREE.Clock();
+        const userData = { avatarGroup: null, bvhBones: null };
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const delta = clock.getDelta();
+            
+            if (mixer && isPlaying) {
+                mixer.update(delta);
+            }
+            
+            // Auto-rotate camera slightly
+            if (!isPlaying) {
+                camera.position.x = Math.sin(Date.now() * 0.0005) * 20;
+                camera.position.z = 120 + Math.cos(Date.now() * 0.0005) * 20;
+                camera.lookAt(0, 80, 0);
+            }
+            
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // Example BVH files (sample data)
+        const sampleBVHFiles = [
+            { name: 'tea', path: '../data/bvh/tea.bvh' },
+            { name: 'teach', path: '../data/bvh/teach.bvh' },
+            { name: 'teacher', path: '../data/bvh/teacher.bvh' },
+            { name: 'team', path: '../data/bvh/team.bvh' },
+            { name: 'technology', path: '../data/bvh/technology.bvh' },
+        ];
+        
+        const wordList = document.getElementById('word-list');
+        sampleBVHFiles.forEach(item => {
+            const tag = document.createElement('span');
+            tag.className = 'word-tag';
+            tag.textContent = item.name;
+            tag.addEventListener('click', () => {
+                document.querySelectorAll('.word-tag').forEach(t => t.classList.remove('active'));
+                tag.classList.add('active');
+                loadBVH(item.path);
+            });
+            wordList.appendChild(tag);
+        });
+    </script>
+</body>
+</html>
